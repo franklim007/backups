@@ -1,0 +1,129 @@
+-- =========================================================
+-- check_backups.sql.j2
+-- Comprobacion de estado de backups RMAN - Oracle Single
+-- Generado por Ansible - {{ ansible_date_time.iso8601 }}
+-- =========================================================
+
+SET PAGESIZE 200
+SET LINESIZE 300
+SET FEEDBACK OFF
+SET HEADING ON
+SET TRIMSPOOL ON
+SET SERVEROUTPUT ON SIZE UNLIMITED
+
+COLUMN db_name        FORMAT A12
+COLUMN tipo           FORMAT A20
+COLUMN estado         FORMAT A10
+COLUMN inicio         FORMAT A20
+COLUMN fin            FORMAT A20
+COLUMN duracion       FORMAT A12
+COLUMN size_gb        FORMAT 9999.99
+COLUMN horas_desde    FORMAT 9999.9
+
+PROMPT ============================================================
+PROMPT  INFORMACION GENERAL DE LA INSTANCIA
+PROMPT ============================================================
+SELECT name AS db_name, open_mode, database_role, log_mode, flashback_on
+FROM v$database;
+
+PROMPT
+PROMPT ============================================================
+PROMPT  ULTIMOS BACKUPS (ultimos {{ dias_historico }} dias)
+PROMPT ============================================================
+SELECT
+    input_type AS tipo,
+    status     AS estado,
+    TO_CHAR(start_time, 'DD-MM-YYYY HH24:MI:SS') AS inicio,
+    TO_CHAR(end_time,   'DD-MM-YYYY HH24:MI:SS') AS fin,
+    TO_CHAR(elapsed_seconds/60, '9999.9') || ' min' AS duracion,
+    ROUND(output_bytes/1024/1024/1024, 2) AS size_gb,
+    ROUND((SYSDATE - end_time) * 24, 1)   AS horas_desde
+FROM v$rman_backup_job_details
+WHERE start_time > SYSDATE - {{ dias_historico }}
+ORDER BY start_time DESC;
+
+PROMPT
+PROMPT ============================================================
+PROMPT  ULTIMO BACKUP EXITOSO POR TIPO
+PROMPT ============================================================
+SELECT
+    input_type AS tipo,
+    TO_CHAR(MAX(end_time), 'DD-MM-YYYY HH24:MI') AS ultimo_ok,
+    ROUND((SYSDATE - MAX(end_time)) * 24, 1) AS horas_desde,
+    CASE
+        WHEN input_type LIKE '%FULL%'
+             AND (SYSDATE - MAX(end_time)) * 24 > {{ umbral_full_horas }}
+             THEN 'ALERTA'
+        WHEN input_type LIKE '%INCR%'
+             AND (SYSDATE - MAX(end_time)) * 24 > {{ umbral_incr_horas }}
+             THEN 'ALERTA'
+        WHEN input_type = 'ARCHIVELOG'
+             AND (SYSDATE - MAX(end_time)) * 24 > {{ umbral_archivelog_horas }}
+             THEN 'ALERTA'
+        ELSE 'OK'
+    END AS estado_umbral
+FROM v$rman_backup_job_details
+WHERE status = 'COMPLETED'
+GROUP BY input_type
+ORDER BY input_type;
+
+PROMPT
+PROMPT ============================================================
+PROMPT  BACKUPS FALLIDOS (ultimos {{ dias_historico }} dias)
+PROMPT ============================================================
+SELECT
+    input_type AS tipo,
+    status     AS estado,
+    TO_CHAR(start_time, 'DD-MM-YYYY HH24:MI') AS inicio,
+    TO_CHAR(end_time,   'DD-MM-YYYY HH24:MI') AS fin
+FROM v$rman_backup_job_details
+WHERE status NOT IN ('COMPLETED', 'RUNNING')
+  AND start_time > SYSDATE - {{ dias_historico }}
+ORDER BY start_time DESC;
+
+PROMPT
+PROMPT ============================================================
+PROMPT  ARCHIVELOGS PENDIENTES DE BACKUP
+PROMPT ============================================================
+SELECT
+    thread#,
+    COUNT(*) AS pendientes,
+    TO_CHAR(MIN(first_time), 'DD-MM-YYYY HH24:MI') AS mas_antiguo,
+    TO_CHAR(MAX(first_time), 'DD-MM-YYYY HH24:MI') AS mas_reciente
+FROM v$archived_log
+WHERE backup_count = 0
+  AND deleted = 'NO'
+  AND standby_dest = 'NO'
+GROUP BY thread#;
+
+PROMPT
+PROMPT ============================================================
+PROMPT  USO DE LA FRA
+PROMPT ============================================================
+SELECT
+    name,
+    ROUND(space_limit/1024/1024/1024, 2) AS size_gb,
+    ROUND(space_used/1024/1024/1024, 2)  AS usado_gb,
+    ROUND((space_used/space_limit)*100, 2) AS pct_uso
+FROM v$recovery_file_dest;
+
+PROMPT
+PROMPT ============================================================
+PROMPT  DETALLE USO FRA POR TIPO
+PROMPT ============================================================
+SELECT
+    file_type,
+    ROUND(percent_space_used, 2)        AS pct_usado,
+    ROUND(percent_space_reclaimable, 2) AS pct_reclamable,
+    number_of_files                     AS num_ficheros
+FROM v$flash_recovery_area_usage
+WHERE number_of_files > 0
+ORDER BY percent_space_used DESC;
+
+PROMPT
+PROMPT ============================================================
+PROMPT  CONFIGURACION RMAN
+PROMPT ============================================================
+SELECT name, value FROM v$rman_configuration ORDER BY name;
+
+EXIT
