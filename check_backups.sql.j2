@@ -3,23 +3,57 @@
 -- Comprobacion de estado de backups RMAN - Oracle Single
 -- Generado por Ansible - {{ ansible_date_time.iso8601 }}
 -- =========================================================
-
-SET PAGESIZE 200
-SET LINESIZE 300
-SET FEEDBACK OFF
-SET HEADING ON
-SET TRIMSPOOL ON
+SET PAGESIZE    9999
+SET LINESIZE    200
+SET LONG        20000
+SET LONGCHUNKSIZE 2000
+SET FEEDBACK    OFF
+SET HEADING     ON
+SET TRIMSPOOL   ON
+SET TRIMOUT     ON
+SET TAB         OFF
+SET WRAP        OFF
+SET NEWPAGE     NONE
+SET VERIFY      OFF
+SET TERMOUT     ON
+SET ECHO        OFF
 SET SERVEROUTPUT ON SIZE UNLIMITED
+SET NUMWIDTH    12
+SET NULL        '-'
+SET COLSEP      ' | '
 
-COLUMN db_name        FORMAT A12
-COLUMN tipo           FORMAT A20
-COLUMN estado         FORMAT A10
-COLUMN inicio         FORMAT A20
-COLUMN fin            FORMAT A20
-COLUMN duracion       FORMAT A12
-COLUMN size_gb        FORMAT 9999.99
-COLUMN horas_desde    FORMAT 9999.9
+-- ----- Formato de columnas (alineado por secciones) -----
+COLUMN db_name         FORMAT A12       HEADING 'DB_NAME'
+COLUMN open_mode       FORMAT A12       HEADING 'OPEN_MODE'
+COLUMN database_role   FORMAT A16       HEADING 'DB_ROLE'
+COLUMN log_mode        FORMAT A12       HEADING 'LOG_MODE'
+COLUMN flashback_on    FORMAT A6        HEADING 'FLBK'
 
+COLUMN tipo            FORMAT A18       HEADING 'TIPO'
+COLUMN estado          FORMAT A10       HEADING 'ESTADO'
+COLUMN inicio          FORMAT A19       HEADING 'INICIO'
+COLUMN fin             FORMAT A19       HEADING 'FIN'
+COLUMN minutos         FORMAT 99990.9   HEADING 'MINUTOS'
+COLUMN size_gb         FORMAT 99990.99  HEADING 'SIZE_GB'
+COLUMN horas_desde     FORMAT 99990.9   HEADING 'HORAS|DESDE'
+COLUMN ultimo_ok       FORMAT A17       HEADING 'ULTIMO_OK'
+COLUMN estado_umbral   FORMAT A7        HEADING 'UMBRAL'
+
+COLUMN thread#         FORMAT 9999      HEADING 'THR#'
+COLUMN pendientes      FORMAT 999999    HEADING 'PEND'
+COLUMN mas_antiguo     FORMAT A17       HEADING 'MAS_ANTIGUO'
+COLUMN mas_reciente    FORMAT A17       HEADING 'MAS_RECIENTE'
+
+COLUMN name            FORMAT A45       HEADING 'NAME'
+COLUMN usado_gb        FORMAT 99990.99  HEADING 'USADO_GB'
+COLUMN pct_uso         FORMAT 990.99    HEADING 'PCT_USO'
+
+COLUMN file_type       FORMAT A22       HEADING 'FILE_TYPE'
+COLUMN pct_usado       FORMAT 990.99    HEADING 'PCT_USADO'
+COLUMN pct_reclamable  FORMAT 990.99    HEADING 'PCT_RECL'
+COLUMN num_ficheros    FORMAT 99999     HEADING 'N_FIC'
+
+COLUMN value           FORMAT A80       HEADING 'VALUE'
 PROMPT ============================================================
 PROMPT  INFORMACION GENERAL DE LA INSTANCIA
 PROMPT ============================================================
