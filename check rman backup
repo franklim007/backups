@@ -1,0 +1,85 @@
+---
+# =============================================================================
+# check_rman_backups.yml
+# Comprueba el estado de los backups RMAN en BBDD Oracle Single
+# Uso: ansible-playbook -i inventario check_rman_backups.yml --limit single
+# =============================================================================
+
+- name: Comprobacion de backups RMAN - Oracle Single
+  hosts: all
+  become: yes
+  become_user: oracle
+  gather_facts: yes
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+
+    - name: Leer instancias desde /etc/oratab
+      ansible.builtin.shell: >
+        grep -v '^#' /etc/oratab | grep -v '^$' | grep -v '^\*'
+        | awk -F: '{print $1":"$2}'
+      register: oratab_entries
+      changed_when: false
+
+    - name: Preparar directorio temporal remoto
+      ansible.builtin.file:
+        path: "{{ tmp_remote_dir }}"
+        state: directory
+        mode: '0750'
+
+    - name: Generar script SQL desde plantilla
+      ansible.builtin.template:
+        src: templates/check_backups.sql.j2
+        dest: "{{ tmp_remote_dir }}/check_backups.sql"
+        mode: '0640'
+
+    - name: Ejecutar comprobacion por cada instancia
+      ansible.builtin.shell: |
+        export ORACLE_SID={{ item.split(':')[0] }}
+        export ORACLE_HOME={{ item.split(':')[1] }}
+        export PATH=$ORACLE_HOME/bin:$PATH
+        export NLS_DATE_FORMAT='DD-MM-YYYY HH24:MI:SS'
+        $ORACLE_HOME/bin/sqlplus -S / as sysdba @{{ tmp_remote_dir }}/check_backups.sql
+      register: resultado_backups
+      loop: "{{ oratab_entries.stdout_lines }}"
+      loop_control:
+        label: "{{ item.split(':')[0] }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Crear directorio local de informes
+      ansible.builtin.file:
+        path: "{{ log_local_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: no
+      run_once: true
+
+    - name: Generar informe desde plantilla
+      ansible.builtin.template:
+        src: templates/informe.txt.j2
+        dest: "{{ log_local_dir }}/rman_{{ inventory_hostname }}_{{ ansible_date_time.date }}.log"
+        mode: '0644'
+      delegate_to: localhost
+      become: no
+
+    - name: Detectar alertas (fallos u ORA-)
+      ansible.builtin.set_fact:
+        tiene_alertas: "{{ resultado_backups.results
+          | selectattr('stdout', 'search', 'FAILED|ORA-|ALERTA')
+          | list | length > 0 }}"
+
+    - name: Resumen por consola
+      ansible.builtin.debug:
+        msg:
+          - "Host         : {{ inventory_hostname }}"
+          - "Instancias   : {{ oratab_entries.stdout_lines | length }}"
+          - "Alertas      : {{ 'SI - revisar log' if tiene_alertas else 'NO' }}"
+          - "Informe      : {{ log_local_dir }}/rman_{{ inventory_hostname }}_{{ ansible_date_time.date }}.log"
+
+    - name: Limpiar directorio temporal remoto
+      ansible.builtin.file:
+        path: "{{ tmp_remote_dir }}"
+        state: absent
