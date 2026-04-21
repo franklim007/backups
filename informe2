@@ -1,0 +1,20 @@
+==========================================================
+  INFORME DE BACKUPS RMAN
+==========================================================
+Host              : {{ inventory_hostname }}
+Instancia (SID)   : {{ item.item.split(':')[0] }}
+ORACLE_HOME       : {{ item.item.split(':')[1] }}
+Fecha ejecucion   : {{ ansible_date_time.iso8601 }}
+Historico         : ultimos {{ dias_historico }} dias
+Umbrales (horas)  : FULL={{ umbral_full_horas }} / INCR={{ umbral_incr_horas }} / ARCH={{ umbral_archivelog_horas }}
+RC sqlplus        : {{ item.rc | default('N/A') }}
+==========================================================
+
+{{ item.stdout | default('(sin salida)') }}
+{% if item.stderr is defined and item.stderr | trim | length > 0 %}
+
+----------------------------------------------------------
+  STDERR
+----------------------------------------------------------
+{{ item.stderr }}
+{% endif %}
