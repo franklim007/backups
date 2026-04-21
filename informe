@@ -1,0 +1,27 @@
+==========================================================
+  INFORME DE BACKUPS RMAN
+==========================================================
+Host              : {{ inventory_hostname }}
+Fecha ejecucion   : {{ ansible_date_time.iso8601 }}
+Historico         : ultimos {{ dias_historico }} dias
+Umbrales (horas)  : FULL={{ umbral_full_horas }} / INCR={{ umbral_incr_horas }} / ARCH={{ umbral_archivelog_horas }}
+Instancias        : {{ oratab_entries.stdout_lines | length }}
+==========================================================
+
+{% for res in resultado_backups.results %}
+{% set sid = res.item.split(':')[0] %}
+{% set ohome = res.item.split(':')[1] %}
+
+##########################################################
+# INSTANCIA : {{ sid }}
+# ORACLE_HOME: {{ ohome }}
+# RESULTADO : {{ 'OK' if res.rc == 0 else 'ERROR (rc=' ~ res.rc ~ ')' }}
+##########################################################
+{{ res.stdout }}
+{% if res.stderr | trim | length > 0 %}
+
+--- STDERR ---
+{{ res.stderr }}
+{% endif %}
+
+{% endfor %}
