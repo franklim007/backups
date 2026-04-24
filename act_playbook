@@ -1,0 +1,179 @@
+---
+# =============================================================================
+# check_rman_backups.yml
+# Comprueba el estado de los backups RMAN en BBDD Oracle Single.
+# Ademas, consolida en un unico fichero las instancias SIN ningun backup
+# COMPLETED en los ultimos {{ dias_historico }} dias.
+#
+# Uso: ansible-playbook -i inventario check_rman_backups.yml --limit single
+# =============================================================================
+
+- name: Comprobacion de backups RMAN - Oracle Single
+  hosts: all
+  gather_facts: yes
+  serial: 1
+  vars_files:
+    - vars/main.yml
+
+  tasks:
+
+    - name: Leer instancias desde /etc/oratab
+      ansible.builtin.shell: >
+        grep -v '^#' /etc/oratab | grep -v '^$' | grep -v '^\*'
+        | awk -F: '{print $1":"$2}'
+      register: oratab_entries
+      changed_when: false
+
+    - name: Abortar si no hay instancias en /etc/oratab
+      ansible.builtin.fail:
+        msg: "No se han encontrado instancias validas en /etc/oratab de {{ inventory_hostname }}"
+      when: oratab_entries.stdout_lines | length == 0
+
+    - name: Preparar directorio temporal remoto
+      ansible.builtin.file:
+        path: "{{ tmp_remote_dir }}"
+        state: directory
+        mode: '0750'
+
+    - name: Generar script SQL desde plantilla
+      ansible.builtin.template:
+        src: templates/check_backups.sql.j2
+        dest: "{{ tmp_remote_dir }}/check_backups.sql"
+        mode: '0640'
+
+    - name: Ejecutar comprobacion por cada instancia
+      ansible.builtin.shell: |
+        export ORACLE_SID={{ item.split(':')[0] }}
+        export ORACLE_HOME={{ item.split(':')[1] }}
+        export PATH=$ORACLE_HOME/bin:$PATH
+        export NLS_DATE_FORMAT='DD-MM-YYYY HH24:MI:SS'
+        $ORACLE_HOME/bin/sqlplus -S / as sysdba @{{ tmp_remote_dir }}/check_backups.sql
+      register: resultado_backups
+      with_items: "{{ oratab_entries.stdout_lines }}"
+      changed_when: false
+      failed_when: false
+
+    - name: Crear directorio local de informes
+      ansible.builtin.file:
+        path: "{{ log_local_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+
+    - name: Generar un informe por cada instancia
+      ansible.builtin.template:
+        src: templates/informe.txt.j2
+        dest: "{{ log_local_dir }}/rman_{{ inventory_hostname }}_{{ item.item.split(':')[0] }}_{{ ansible_date_time.date }}.log"
+        mode: '0644'
+      with_items: "{{ resultado_backups.results }}"
+      delegate_to: localhost
+
+    # -------------------------------------------------------------------------
+    # Consolidacion de alertas: instancias SIN backup COMPLETED en N dias
+    # -------------------------------------------------------------------------
+
+    - name: Extraer lineas-marcador ##RESUMEN## del stdout de cada instancia
+      ansible.builtin.set_fact:
+        lineas_resumen_host: "{{ resultado_backups.results
+          | map(attribute='stdout_lines') | list | flatten
+          | select('match', '^##RESUMEN##\\|')
+          | list }}"
+
+    - name: Filtrar solo las lineas con ESTADO = ALERTA
+      ansible.builtin.set_fact:
+        alertas_host: "{{ lineas_resumen_host
+          | select('match', '.*\\|ALERTA$')
+          | list }}"
+
+    - name: Componer filas legibles (HOST | SID | TIPO | ULTIMO_OK | HORAS | ESTADO)
+      ansible.builtin.set_fact:
+        filas_alerta_host: >-
+          {{ alertas_host
+             | map('regex_replace',
+                   '^##RESUMEN##\\|(.*)\\|(.*)\\|(.*)\\|(.*)\\|(.*)$',
+                   inventory_hostname ~ ' | \1 | \2 | \3 | \4 | \5')
+             | list }}
+
+    - name: Consolidar filas de todos los hosts en una sola lista
+      ansible.builtin.set_fact:
+        filas_alerta_global_raw: "{{ ansible_play_hosts
+          | map('extract', hostvars, 'filas_alerta_host')
+          | list | flatten
+          | select('string')
+          | list }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Separar alertas criticas (SIN_BACKUP) del resto
+      ansible.builtin.set_fact:
+        filas_sin_backup: "{{ filas_alerta_global_raw
+          | select('search', '\\| SIN_BACKUP \\|')
+          | list }}"
+        filas_otras_alertas: "{{ filas_alerta_global_raw
+          | reject('search', '\\| SIN_BACKUP \\|')
+          | list }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Ordenar - primero SIN_BACKUP, despues el resto
+      ansible.builtin.set_fact:
+        filas_alerta_global: "{{ filas_sin_backup + filas_otras_alertas }}"
+      run_once: true
+      delegate_to: localhost
+
+    - name: Escribir fichero unico de resumen de alertas (>{{ dias_historico }} dias sin backup)
+      ansible.builtin.copy:
+        dest: "{{ log_local_dir }}/rman_ALERTAS_sin_backup_{{ ansible_date_time.date }}.txt"
+        mode: '0644'
+        content: |
+          =====================================================================
+            RESUMEN DE ALERTAS RMAN
+            Umbral     : {{ dias_historico }} dias
+            Generado   : {{ ansible_date_time.iso8601 }}
+            Formato    : HOST | SID | TIPO | ULTIMO_OK | HORAS | ESTADO
+            Orden      : 1o CRITICAS (sin ningun backup) - 2o resto de alertas
+          =====================================================================
+          {% if filas_alerta_global | length == 0 %}
+          (sin alertas - todas las instancias tienen backup COMPLETED reciente)
+          {% else %}
+          --- CRITICAS: sin ningun backup COMPLETED en los ultimos {{ dias_historico }} dias ---
+          {% if filas_sin_backup | length == 0 %}
+          (ninguna)
+          {% else %}
+          {% for fila in filas_sin_backup %}
+          {{ fila }}
+          {% endfor %}
+          {% endif %}
+
+          --- OTRAS ALERTAS: tipos de backup que superan su umbral ---
+          {% if filas_otras_alertas | length == 0 %}
+          (ninguna)
+          {% else %}
+          {% for fila in filas_otras_alertas %}
+          {{ fila }}
+          {% endfor %}
+          {% endif %}
+          {% endif %}
+          =====================================================================
+          Total criticas (SIN_BACKUP) : {{ filas_sin_backup | length }}
+          Total otras alertas         : {{ filas_otras_alertas | length }}
+          Total general               : {{ filas_alerta_global | length }}
+          =====================================================================
+      run_once: true
+      delegate_to: localhost
+
+    - name: Resumen por consola
+      ansible.builtin.debug:
+        msg:
+          - "Host          : {{ inventory_hostname }}"
+          - "Instancias    : {{ oratab_entries.stdout_lines | length }}"
+          - "Alertas host  : {{ filas_alerta_host | length }}"
+          - "Logs detalle  : {{ log_local_dir }}/rman_{{ inventory_hostname }}_<SID>_{{ ansible_date_time.date }}.log"
+          - "Resumen unico : {{ log_local_dir }}/rman_ALERTAS_sin_backup_{{ ansible_date_time.date }}.txt"
+          - "SIDs          : {{ oratab_entries.stdout_lines | map('regex_replace', ':.*$', '') | list | join(', ') }}"
+
+    - name: Limpiar directorio temporal remoto
+      ansible.builtin.file:
+        path: "{{ tmp_remote_dir }}"
+        state: absent
