@@ -1,3 +1,6 @@
+FAILED! => {"msg": "template error while templating string: no filter named 'flatten'. String: {{ resultado_backups.results | map(attribute='stdout_lines') | list | flatten | select('match', '^##RESUMEN##\\\\|') | list 
+
+
 ---
 # =============================================================================
 # check_rman_backups.yml
